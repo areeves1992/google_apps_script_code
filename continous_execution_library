@@ -1,0 +1,302 @@
+
+/**
+
+This code was originally written by Patrick Martinent and the intent was to continue the six minute script limit for Google Scripts (GS).
+
+I found some errors and changed them in this code.
+
+Here is a link to the original gist with the code I built this off of:
+
+https://gist.github.com/patt0/8395003
+
+My comments should help walk through the logic of this.
+
+
+*/
+
+/**
+ *  ---  Continous Execution Library ---
+ *
+ *  Copyright (c) 2013 Patrick Martinent
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+
+/*************************************************************************
+* Call this function at the start of your batch script
+* it will create the necessary UserProperties with the fname
+* so that it can keep managing the triggers until the batch
+* execution is complete. It will store the start time for the
+* email it sends out to you when the batch has completed
+*
+* @param {fname} str The batch function to invoke repeatedly.
+* the batch function name is one that we want to call again and again, but his comments don't make that too clear... - AMR
+*/
+function startOrResumeContinousExecutionInstance(fname){
+
+  //Actually, instead of using UserProperties, we're going ot use ScriptProperties because there is a bug in 
+  //Google that stops a user from seeing their userProperties and changing them at the time this code was written.
+  
+  //this gets our properties. I kept the variable called userproperties because by the time I realized it was an issue,
+  //I used this all over the code and this was easier.
+  var userProperties = PropertiesService.getScriptProperties();
+  
+  //This get the value associated with the key called "GASCBL_functionnamehere_START_BATCH"
+  //so we can see when we started this batch
+  var start = userProperties.getProperty('GASCBL_' + fname + '_START_BATCH');
+ 
+  //if that value isn't anything to begin with, we should set it.
+  if (start === "" || start === null){
+    
+    //Here we are renaming the var start with todays date
+    //Remember, this is using JavaScripts Date functions/object.
+    //http://www.w3schools.com/jsref/jsref_obj_date.asp
+    start = new Date();
+    
+    //now we need to set the property with the key "GASCBL_functionnamehere_START_BATCH" and the value as the date.
+    userProperties.setProperty('GASCBL_' + fname + '_START_BATCH', start);
+    
+    //we also need to set the key to "" or blank because we clearly haven't started anything yet.
+    userProperties.setProperty('GASCBL_' + fname + '_KEY', "");
+  
+  }//end of the if statement
+  
+  //This sets the key "GASCBL_functionnamehere_START_ITERATION" with the date.
+  //The difference is that the batch was this was the first time this was run - this is the start of our batch.
+  //The second time this function is called, we only need to reset the iteration, or the first second third, etc 
+  //time we need to run the code again
+  userProperties.setProperty('GASCBL_' + fname + '_START_ITERATION', new Date());
+  
+  //Delete the old trigger name to keep things clean
+  //You can only have ~40 triggers, so keep track of them.
+  deleteCurrentTrigger_(fname);
+  
+  //Now we need to start the second trigger for this function, and we should wait 420000 ms, or 7 minutes.
+  //The code will stop around 4.5 minutes so there is a 3.5 minute difference from when one stops and another stops to give the code wait time to catch up.
+  //This probably could be shorter, but I didn't want to push it.
+  enableNextTrigger_(fname,420000); 
+}//end of startOrResumeContinousExecutionInstance function
+
+/*************************************************************************
+* In order to be able to understand where your batch last executed you
+* set the key ( or counter ) everytime a new item in your batch is complete
+* when you restart the batch through the trigger, use getBatchKey to start 
+* at the right place
+*
+* @param {fname} str The batch function we are continuously triggering.
+* @param {key} str The batch key that was just completed.
+*/
+function setBatchKey(fname, key){
+  
+  //We need to get our properties again
+  var userProperties = PropertiesService.getScriptProperties();
+  
+  //Now, we are setting the key with the spot (or usually i,j,or k) we were at in our loop
+  userProperties.setProperty('GASCBL_' + fname + '_KEY', key);
+  
+  //We also need to sleep for 1000ms or .016 minutes because Google kept telling me I called this too many times one after another
+  Utilities.sleep(1000);
+}//end of function setBatchKey
+
+/*************************************************************************
+* This function returns the current batch key, so you can start processing at
+* the right position when your batch resumes from the execution of the trigger
+*
+* @param {fname} str The batch function we are continuously triggering.
+* @returns {string} The batch key which was last completed.
+*/
+function getBatchKey(fname){
+  
+  //getting our properties again...
+  var userProperties = PropertiesService.getScriptProperties();
+  
+  //Now, all we are doing is returning the key or iterator (i,j, or k) we were at at
+  return userProperties.getProperty('GASCBL_' + fname + '_KEY');
+}//end of function getBatchKey
+
+
+/*************************************************************************
+* When the batch is complete run this function, and pass it an email and
+* custom title so you have an indication that the process is complete as
+* well as the time it took
+*
+* @param {fname} str The batch function we are continuously triggering.
+* @param {emailRecipient} str The email address to which the email will be sent.
+* @param {customTitle} str The custom title for the email.
+*/
+function endContinuousExecutionInstance(fname, emailRecipient, customTitle){
+
+  //we need to get our properties again
+  var userProperties = PropertiesService.getScriptProperties();
+  
+  //The end will be right now because this is only called when we are done with the batch.
+  var end = new Date();
+  
+  //Now we are getting the start time of the entire batch
+  var start = userProperties.getProperty('GASCBL_' + fname + '_START_BATCH');
+  
+  //We're also getting the key we stopped at
+  var key = userProperties.getProperty('GASCBL_' + fname + '_KEY');
+
+  //This is the subject for the email we are going to send to ourselves
+  var emailTitle = customTitle + " : Continuous Execution Script for: " + fname;
+  
+  //This is the body of the email we are sending ourselves
+  //We are including the start time, the end time and the key
+  //The "<br>"s are HTML for breaks so it looks clean.
+  var body = "Started : " + start + "<br>" + "Ended :" + end + "<br>" + "LAST KEY : " + key + "<br>"; 
+
+  //We're deleting our trigger so it stays clean.
+  deleteCurrentTrigger_(fname);
+  
+  //And deleting all the properties we used
+  userProperties.deleteProperty('GASCBL_' + fname + '_START_ITERATION');
+  userProperties.deleteProperty('GASCBL_' + fname + '_START_BATCH');
+  userProperties.deleteProperty('GASCBL_' + fname + '_KEY');
+  userProperties.deleteProperty('GASCBL_' + fname);
+}//end of function endContinuousExecutionInstance
+
+/*************************************************************************
+* Call this function when finishing a batch item to find out if we have
+* time for one more. if not exit elegantly and let the batch restart with
+* the trigger
+*
+* @param {fname} str The batch function we are continuously triggering.
+* @returns (boolean) whether we are close to reaching the exec time limit
+*/
+function isTimeRunningOut(fname){
+  
+  //getting the properties
+  var userProperties = PropertiesService.getScriptProperties();
+  
+  //we're both getting the property for the iteration and turning it into a date
+  var start = new Date(userProperties.getProperty('GASCBL_' + fname + '_START_ITERATION'));
+  
+  //Setting the variable to the date and time now
+  var now = new Date();
+  
+  //this is finding out the number of seconds from now to when we started and rounding it.
+  var timeElapsed = Math.floor((now.getTime() - start.getTime())/1000);
+  
+  //This will return a true  if the time passed since starting the iteration is larger than 4.5 minutes
+  return (timeElapsed > 270);
+}//end of function isTimeRunningOut
+
+/*
+* Set the next trigger, 7 minutes in the future
+*/
+function enableNextTrigger_(fname, time) {
+
+  //I'm admitting that this was totally intended to be a private function (denoted by the _ behind the function)
+  // and I used it somewhere and edited it, but it was needed.
+  
+  //getting the properties
+  var userProperties = PropertiesService.getScriptProperties();
+  
+  //making the next trigger which is time based after the time you need into the function in ms 
+  var nextTrigger = ScriptApp.newTrigger(fname).timeBased().after(time).create();
+
+  //this is just getting the id so we can store it.
+  //to be honest, I don't think we need this anymore, but I'm afraid to change it...
+  var triggerId = nextTrigger.getUniqueId();
+
+  //this sets the key with the function name with the value of the trigger id
+  userProperties.setProperty('GASCBL_' + fname, triggerId);
+
+
+}
+
+/*
+* Deletes the current trigger, so we don't end up with undeleted
+* time based triggers all over the place
+*/
+
+//This function was a hot mess, so stick with me here.
+//It was also intended to be a private function, but we don't always get what we want.
+
+function deleteCurrentTrigger_(fname) {
+
+  //getting those properties
+  var userProperties = PropertiesService.getScriptProperties();
+
+  //now we're just getting the triggerID again
+  //not sure if this even has to be in here, but I'm afraid to remove these...
+  var triggerId = userProperties.getProperty('GASCBL_' + fname);
+  
+  //the var triggers is now an object with ALL our triggers, not just the ones we made
+  //This was the down fall of the original code.
+  var triggers = ScriptApp.getProjectTriggers();
+
+  //first of all we need to go backwards because we're deleting stuff
+  //Why this was not in the original code, I do not know.
+  //If this concept is weird to you, here is some help with it:
+  //https://forums.unrealengine.com/showthread.php?69383-A-Little-Tip-Remove-elements-from-an-array-in-one-pass-with-a-reverse-for-loop
+  //plain old data people usually don't have to mess with i-- ing.
+  for (var i = triggers.length -1 ; i >= 0; i--) {
+    
+    //We need to make sure that we actually have triggers to begin with and if we don't, we need to break (or return out of the loop)
+    //This actually may not be necessary, considering if we have no triggers, var i will be -1 on the first pass,
+    //but the original code has no checks so we need to double check.
+    if (triggers[i] == '' || triggers[i] === null || triggers.length == 0){
+      break; 
+    }//end of if
+
+    //now we need to make sure that the trigger at i matches the function name we are trying to delete
+    //The handler function returns the name of the function it is running
+    //This was not in the original code and threw everything off because it deleted everything
+    //We also need to make sure we don't delete the original triggers that will keep this thing going every day.
+    if ((triggers[i].getHandlerFunction() == fname) && (triggers[i].getHandlerFunction() != "mainScript")){
+      
+      //We should sleep before we call this so Google doesn't yell at us
+      Utilities.sleep(1000);
+      
+      //now we delete it!
+      ScriptApp.deleteTrigger(triggers[i]);
+      
+    
+    }//end of if
+    
+    //now we need to set the function name to blank
+    userProperties.setProperty('GASCBL_' + fname, "");
+  }//end of for loop
+
+}//end function deleteCurrentTrigger_
+
+
+function getDateTime() {
+    var now     = new Date(); 
+    var year    = now.getFullYear();
+    var month   = now.getMonth()+1; 
+    var day     = now.getDate();
+    var hour    = now.getHours();
+    var minute  = now.getMinutes();
+    var second  = now.getSeconds(); 
+    if(month.toString().length == 1) {
+        var month = '0'+month;
+    }
+    if(day.toString().length == 1) {
+        var day = '0'+day;
+    }   
+    if(hour.toString().length == 1) {
+        var hour = '0'+hour;
+    }
+    if(minute.toString().length == 1) {
+        var minute = '0'+minute;
+    }
+    if(second.toString().length == 1) {
+        var second = '0'+second;
+    }   
+    var dateTime = month+'/'+day+'/'+year+' '+hour+':'+minute+':'+second;   
+     return dateTime;
+}
